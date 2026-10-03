@@ -33,86 +33,44 @@
     (routes[r] || routes.home)(arg && decodeURIComponent(arg));
   }
 
-  // ───────── 手寫板 ─────────
-  function makePad(canvas, opts = {}) {
-    const ctx = canvas.getContext("2d");
-    let strokes = [], cur = null, penSeen = false, eraser = false;
-    const width = opts.width || 3.2;
-    function size() {
-      const r = canvas.getBoundingClientRect(), d = window.devicePixelRatio || 1;
-      canvas.width = Math.round(r.width * d); canvas.height = Math.round(r.height * d);
-      ctx.setTransform(d, 0, 0, d, 0, 0); redraw();
+  // ───────── 打字作答 ─────────
+  // 比對時忽略空白與標點
+  const norm = t => String(t).replace(/[\s，。、；：！？「」『』（）()／\/,.;:!?]/g, "");
+  function typeHTML(id, rows, ph) {
+    return rows > 1
+      ? `<textarea class="typein" id="${id}" rows="${rows}" placeholder="${ph}" autocomplete="off" spellcheck="false"></textarea>`
+      : `<input class="typein one" id="${id}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
+  }
+  // 單行按 Enter、多行按 Ctrl/⌘+Enter 送出；注音選字中的 Enter 不算
+  function onSubmit(el, fn) {
+    el.addEventListener("keydown", e => {
+      if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return;
+      if (el.tagName === "TEXTAREA" && !(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault(); fn();
+    });
+    setTimeout(() => el.focus({ preventScroll: true }), 50);
+  }
+  function needInput(el, msg) {
+    if (norm(el.value)) return false;
+    el.classList.add("shake"); setTimeout(() => el.classList.remove("shake"), 400); toast(msg); el.focus(); return true;
+  }
+  // 逐字比對（LCS）：回傳錯字數，以及標出錯字的「你打的」
+  function diff(typed, ans) {
+    const a = [...norm(typed)], b = [...norm(ans)];
+    const L = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+    for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--)
+      L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    let i = 0, j = 0, html = "";
+    while (i < a.length || j < b.length) {
+      if (i < a.length && j < b.length && a[i] === b[j]) { html += esc(a[i]); i++; j++; }
+      else if (i < a.length && j < b.length && L[i + 1][j + 1] === L[i][j]) { html += `<del>${esc(a[i])}</del><ins>${esc(b[j])}</ins>`; i++; j++; }
+      else if (j < b.length && (i >= a.length || L[i][j + 1] >= L[i + 1][j])) { html += `<ins class="miss">${esc(b[j])}</ins>`; j++; }
+      else { html += `<del>${esc(a[i])}</del>`; i++; }
     }
-    function inkColor() { return getComputedStyle(document.documentElement).getPropertyValue("--ink-pen").trim() || "#1d2a5a"; }
-    function drawStroke(s) {
-      ctx.lineCap = "round"; ctx.lineJoin = "round";
-      ctx.globalCompositeOperation = s.er ? "destination-out" : "source-over";
-      ctx.strokeStyle = inkColor();
-      const p = s.pts;
-      if (p.length === 1) { ctx.beginPath(); ctx.arc(p[0][0], p[0][1], (s.er ? 14 : width) / 2 + .6, 0, 7); ctx.fillStyle = ctx.strokeStyle; ctx.fill(); return; }
-      for (let i = 1; i < p.length; i++) {
-        ctx.beginPath();
-        ctx.lineWidth = s.er ? 26 : width * (0.65 + 0.7 * (p[i][2] ?? .5));
-        ctx.moveTo(p[i - 1][0], p[i - 1][1]); ctx.lineTo(p[i][0], p[i][1]); ctx.stroke();
-      }
-      ctx.globalCompositeOperation = "source-over";
-    }
-    function redraw() { const r = canvas.getBoundingClientRect(); ctx.clearRect(0, 0, r.width, r.height); strokes.forEach(drawStroke); }
-    const pos = e => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top, e.pressure || .5]; };
-    canvas.addEventListener("pointerdown", e => {
-      if (e.pointerType === "pen") penSeen = true;
-      if (penSeen && e.pointerType === "touch") return; // 有觸控筆時忽略手掌
-      canvas.setPointerCapture(e.pointerId);
-      cur = { pts: [pos(e)], er: eraser, id: e.pointerId }; strokes.push(cur); drawStroke(cur);
-      e.preventDefault();
-    });
-    canvas.addEventListener("pointermove", e => {
-      if (!cur || cur.id !== e.pointerId) return;
-      const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-      for (const ev of evs) {
-        const p = pos(ev), last = cur.pts[cur.pts.length - 1];
-        cur.pts.push(p);
-        ctx.lineCap = "round"; ctx.strokeStyle = inkColor();
-        ctx.globalCompositeOperation = cur.er ? "destination-out" : "source-over";
-        ctx.lineWidth = cur.er ? 26 : width * (0.65 + 0.7 * p[2]);
-        ctx.beginPath(); ctx.moveTo(last[0], last[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
-        ctx.globalCompositeOperation = "source-over";
-      }
-      e.preventDefault();
-    });
-    const end = e => { if (cur && cur.id === e.pointerId) cur = null; };
-    canvas.addEventListener("pointerup", end); canvas.addEventListener("pointercancel", end);
-    const ro = new ResizeObserver(size); ro.observe(canvas);
-    return {
-      clear() { strokes = []; redraw(); },
-      undo() { strokes.pop(); redraw(); },
-      empty() { return !strokes.some(s => !s.er); },
-      setEraser(v) { eraser = v; },
-    };
+    return { errors: Math.max(a.length, b.length) - L[0][0], html };
   }
-
-  function padHTML(id, height, ghostSize) {
-    return `<div class="pad-wrap"><canvas class="pad lines" id="${id}" style="height:${height}px"></canvas><div class="ghost" id="${id}-ghost" style="font-size:${ghostSize || 30}px"></div></div>
-    <div class="pad-tools">
-      <button class="tool on" data-t="pen">✏️ 筆</button>
-      <button class="tool" data-t="er">🧽 橡皮擦</button>
-      <button class="tool" data-t="undo">↶ 復原</button>
-      <button class="tool" data-t="clear">🗑️ 清除</button>
-      <span class="sp"></span>
-      <button class="tool" data-t="trace" hidden>👻 描寫答案</button>
-    </div>`;
-  }
-  function wireTools(root, pads, onTrace) {
-    root.querySelectorAll(".tool").forEach(b => b.onclick = () => {
-      const t = b.dataset.t;
-      if (t === "pen" || t === "er") {
-        root.querySelectorAll('[data-t="pen"],[data-t="er"]').forEach(x => x.classList.toggle("on", x === b));
-        pads.forEach(p => p.setEraser(t === "er"));
-      } else if (t === "undo") pads.forEach(p => p.undo());
-      else if (t === "clear") pads.forEach(p => p.clear());
-      else if (t === "trace") onTrace && onTrace(b);
-    });
-  }
+  const mineHTML = (d, ok) => `<div class="mine ${ok ? "ok" : ""}"><span class="lbl">你打的</span>${d.html || "（空白）"}</div>`;
+  const lock = el => { el.readOnly = true; el.blur(); };
 
   // ───────── 首頁 ─────────
   const EXAM = GLOSS.filter(g => g.exam);
@@ -130,27 +88,27 @@
         <div class="ring" style="--p:${pct}"><span>${pct}%</span></div>
         <div>
           <h2>段考注釋 ${mastered} / ${EXAM.length} 已熟練</h2>
-          <p>依老師的複習單分四天，點日期直接練那一天的手寫注釋。</p>
+          <p>依老師的複習單分四天，點日期直接練那一天的注釋。</p>
           <div class="days">${days}</div>
         </div>
       </div>
       <div class="grid">
-        <button class="tile main" data-go="gloss/exam"><span class="ic">✍️</span><span><b>注釋手寫練習</b><br><small>考試指定 19 則｜先自己寫，再對答案、打分數，不熟的會一直回來</small></span></button>
+        <button class="tile main" data-go="gloss/exam"><span class="ic">✍️</span><span><b>注釋練習</b><br><small>考試指定 19 則｜先自己打字作答，再對答案、打分數，不熟的會一直回來</small></span></button>
       </div>
       <div class="grid" style="margin-top:12px">
-        <button class="tile main" data-go="poem" style="background:linear-gradient(135deg,#2b7bb9,#5b5bd1)"><span class="ic">🏮</span><span><b>五言絕句默寫</b><br><small>範圍：5 獨坐敬亭山・6 勞勞亭・7 八陣圖・8 尋隱者不遇｜整首手寫、接下句、賞析</small></span></button>
+        <button class="tile main" data-go="poem" style="background:linear-gradient(135deg,#2b7bb9,#5b5bd1)"><span class="ic">🏮</span><span><b>五言絕句默寫</b><br><small>範圍：5 獨坐敬亭山・6 勞勞亭・7 八陣圖・8 尋隱者不遇｜整首默寫、接下句、賞析</small></span></button>
       </div>
       <div class="section-title">字音字形</div>
       <div class="grid">
         <button class="tile" data-go="sound"><span class="ic">🔤</span><b>字音大考驗</b><small>看國字選注音，聲調陷阱多</small></button>
-        <button class="tile" data-go="write"><span class="ic">🖊️</span><b>國字手寫</b><small>看注音，在田字格寫出國字</small></button>
+        <button class="tile" data-go="write"><span class="ic">🖊️</span><b>看注音寫國字</b><small>看注音，打出正確的國字</small></button>
         <button class="tile" data-go="typo"><span class="ic">🔍</span><b>錯字偵探</b><small>單元卷改錯題，點出藏起來的錯字</small></button>
       </div>
       <div class="section-title">課文與閱讀</div>
       <div class="grid">
         <button class="tile" data-go="quiz/ALL"><span class="ic">📝</span><b>選擇題闖關</b><small>單元卷精選＋解析，每關 10 題</small></button>
         <button class="tile" data-go="gift"><span class="ic">🎁</span><b>十二樣禮物</b><small>每樣禮物象徵什麼？</small></button>
-        <button class="tile" data-go="recite"><span class="ic">📜</span><b>論語默寫</b><small>手寫填空，背熟原文</small></button>
+        <button class="tile" data-go="recite"><span class="ic">📜</span><b>論語默寫</b><small>打字填空，背熟原文</small></button>
         <button class="tile" data-go="cards/L1"><span class="ic">📚</span><b>重點卡</b><small>作者、結構、特色一次看</small></button>
         <button class="tile" data-go="gloss/more"><span class="ic">➕</span><b>延伸注釋</b><small>課本其他注釋＋論語詞語</small></button>
         <button class="tile" data-go="wrong"><span class="ic">📒</span><b>錯題本</b><small>${S.wrongQ.length} 題待複習</small></button>
@@ -169,18 +127,18 @@
     resetArmed = Date.now(); toast("再按一次「重設進度」確認"); return false;
   }
 
-  // ───────── 注釋手寫 ─────────
+  // ───────── 注釋練習 ─────────
   routes.gloss = arg => {
     let pool, title;
     if (arg === "more") { pool = GLOSS.filter(g => !g.exam); title = "延伸注釋"; }
-    else if (arg && arg.startsWith("day-")) { const d = arg.slice(4); pool = EXAM.filter(g => g.day === d); title = `注釋手寫 ${d}`; }
-    else { pool = EXAM; title = "注釋手寫練習"; }
+    else if (arg && arg.startsWith("day-")) { const d = arg.slice(4); pool = EXAM.filter(g => g.day === d); title = `注釋練習 ${d}`; }
+    else { pool = EXAM; title = "注釋練習"; }
     setTitle(title);
     // 不熟的排前面
     let queue = shuffle(pool).sort((a, b) => lvl(a.id) - lvl(b.id));
     const total = queue.length; let done = 0, right = 0;
     const firstTry = new Set();
-    let pad;
+    let inp;
 
     function show() {
       if (!queue.length) return finish();
@@ -194,31 +152,29 @@
           <div class="term">${g.term}</div>
           <div class="term-sub">${g.zhuyin ? `<button class="hint-btn" id="zy">看注音</button>` : ""} ${subs ? `　也要寫：${subs} 的意思` : ""}</div>
           ${ctx ? `<div class="ctx">${ctx}</div>` : ""}
-          ${padHTML("pad", 240, 26)}
+          ${typeHTML("inp", 3, "把意思打在這裡…")}
           <div id="ans"></div>
-          <div class="btns" id="act"><button class="btn" id="reveal">寫好了，對答案</button></div>
+          <div class="btns" id="act"><button class="btn" id="reveal">打好了，對答案</button></div>
         </div>`;
-      pad = makePad($("#pad"));
-      wireTools(app, [pad], b => {
-        const gh = $("#pad-ghost"); const on = !gh.textContent;
-        gh.textContent = on ? g.ans : ""; b.classList.toggle("on", on);
-      });
+      inp = $("#inp");
       if ($("#zy")) $("#zy").onclick = e => { e.target.outerHTML = `<span>${g.zhuyin}</span>`; };
-      $("#reveal").onclick = () => {
-        if (pad.empty()) { $("#pad").classList.add("shake"); setTimeout(() => $("#pad").classList.remove("shake"), 400); toast("先用手寫寫寫看喔 ✍️"); return; }
+      const reveal = () => {
+        if (inp.readOnly || needInput(inp, "先打打看喔 ⌨️")) return;
+        lock(inp);
+        const typed = norm(inp.value);
         $("#ans").innerHTML = `<div class="answer pop">
           <div class="a">${esc(g.ans)}</div>
-          ${g.keys.length ? `<div class="keys">檢查有沒有寫到：${g.keys.map(k => `<span>${k}</span>`).join("")}</div>` : ""}
+          ${g.keys.length ? `<div class="keys">關鍵詞（綠色＝你有打到）：${g.keys.map(k => `<span class="${typed.includes(norm(k)) ? "hit" : ""}">${k}</span>`).join("")}</div>` : ""}
           ${g.zhuyin ? `<div class="tip" style="margin-top:6px">注音：${g.zhuyin}</div>` : ""}
           ${g.tip ? `<div class="tip">${esc(g.tip)}</div>` : ""}
         </div>`;
-        app.querySelector('[data-t="trace"]').hidden = false;
         $("#act").innerHTML = `
           <button class="btn good" data-s="2">✅ 寫對了</button>
           <button class="btn warn" data-s="1">🟡 差一點</button>
           <button class="btn bad" data-s="0">❌ 不會</button>`;
         $("#act").querySelectorAll("[data-s]").forEach(b => b.onclick = () => grade(g, +b.dataset.s));
       };
+      $("#reveal").onclick = reveal; onSubmit(inp, reveal);
     }
     function grade(g, s) {
       const cur = lvl(g.id);
@@ -231,16 +187,19 @@
         S.gloss[g.id] = s === 1 ? cur : Math.max(0, cur - 1);
         // 放回隊伍後面一點的位置，等一下再考一次
         queue.shift(); queue.splice(Math.min(queue.length, 2 + (Math.random() * 2 | 0)), 0, g);
-        toast(s === 1 ? "差一點！等一下再寫一次 💪" : "沒關係，照著答案描一次，等一下再考 📌");
-        if (s === 0) { save(); return traceAgain(g); }
+        toast(s === 1 ? "差一點！等一下再考一次 💪" : "沒關係，照著答案打一次，等一下再考 📌");
+        if (s === 0) { save(); return copyOnce(g); }
       }
       save(); show();
     }
-    function traceAgain(g) { // 不會的話先描寫一遍再繼續
-      $("#pad-ghost").textContent = g.ans; pad.clear();
-      app.querySelector('[data-t="trace"]').classList.add("on");
-      $("#act").innerHTML = `<button class="btn" id="next">描完了，下一題</button>`;
-      $("#next").onclick = show;
+    function copyOnce(g) { // 不會的話先照著答案打一遍再繼續
+      inp.readOnly = false; inp.value = ""; inp.placeholder = "看著上面的答案打一遍"; inp.focus();
+      $("#act").innerHTML = `<button class="btn" id="next">打完了，下一題</button>`;
+      const next = () => {
+        if (diff(inp.value, g.ans).errors > 2) { toast("再對照答案打一次喔 👀"); return; }
+        show();
+      };
+      $("#next").onclick = next; onSubmit(inp, next);
     }
     function finish() {
       const stars = right / total >= .9 ? 3 : right / total >= .7 ? 2 : right / total >= .4 ? 1 : 0;
@@ -295,9 +254,9 @@
     show();
   };
 
-  // ───────── 國字手寫（田字格）─────────
+  // ───────── 看注音寫國字 ─────────
   routes.write = () => {
-    setTitle("國字手寫");
+    setTitle("看注音寫國字");
     const qs = shuffle(SOUNDS).slice(0, 10);
     let i = 0, score = 0;
     function show() {
@@ -307,27 +266,26 @@
       app.innerHTML = `<div class="card pop">
         <div class="meta"><span>${tag(s.l)}</span><span>${i + 1} / ${qs.length}</span></div>
         <div class="bar"><i style="width:${i / qs.length * 100}%"></i></div>
-        <p style="text-align:center;color:var(--muted);margin:0">在田字格寫出框框裡的國字</p>
+        <p style="text-align:center;color:var(--muted);margin:0">打出框框裡的國字（打整個詞也可以）</p>
         <div class="word-show">${word}</div>
-        <div class="tian-row"><div class="tian-cell"><canvas id="tian"></canvas><div class="ghost" id="tian-ghost" style="font-size:150px;opacity:.15"></div></div></div>
-        <div class="pad-tools" style="justify-content:center">
-          <button class="tool on" data-t="pen">✏️ 筆</button><button class="tool" data-t="er">🧽</button>
-          <button class="tool" data-t="undo">↶ 復原</button><button class="tool" data-t="clear">🗑️ 清除</button>
-        </div>
+        <div class="type-center">${typeHTML("inp", 1, "打字…")}</div>
         <div id="ans"></div>
         <div class="btns" id="act"><button class="btn" id="reveal">對答案</button></div></div>`;
-      const pad = makePad($("#tian"), { width: 6 });
-      wireTools(app, [pad]);
-      $("#reveal").onclick = () => {
-        if (pad.empty()) { toast("先寫寫看喔 ✍️"); return; }
-        $("#tian-ghost").textContent = s.t;
-        $("#ans").innerHTML = `<div class="answer pop" style="text-align:center"><span class="a" style="font-size:40px">${s.w}</span><div class="tip">淡淡的字疊在你的字上，比對看看筆畫有沒有寫對</div></div>`;
-        $("#act").innerHTML = `<button class="btn good" data-s="1">✅ 寫對了</button><button class="btn bad" data-s="0">❌ 寫錯了</button>`;
-        $("#act").querySelectorAll("[data-s]").forEach(b => b.onclick = () => {
-          if (+b.dataset.s) { score++; addStar(); cheer(); } else { qs.push(s); toast("等一下再寫一次 📌"); }
-          i++; show();
-        });
+      const inp = $("#inp");
+      const check = () => {
+        if (inp.readOnly || needInput(inp, "先打打看喔 ⌨️")) return;
+        lock(inp);
+        const t = norm(inp.value), ok = t === s.t || t === norm(s.w);
+        if (ok) { score++; addStar(); cheer(); } else { qs.push(s); toast("等一下再考一次 📌"); }
+        const mark = [...s.w].map(c => c === s.t ? `<b class="${ok ? "hit" : "miss"}">${c}</b>` : c).join("");
+        $("#ans").innerHTML = `<div class="answer pop ${ok ? "" : "no"}" style="text-align:center">
+          ${ok ? "" : mineHTML({ html: esc(inp.value.trim()) }, false)}
+          <span class="a" style="font-size:40px">${mark}</span>
+          ${ok ? "" : `<div class="tip">注意「${s.t}」的寫法，等一下會再考一次</div>`}</div>`;
+        $("#act").innerHTML = `<button class="btn" id="nx">${i + 1 < qs.length ? "下一題" : "看結果"}</button>`;
+        const nx = $("#nx"); nx.onclick = () => { i++; show(); }; setTimeout(() => nx.focus(), 50);
       };
+      $("#reveal").onclick = check; onSubmit(inp, check);
     }
     show();
   };
@@ -455,25 +413,24 @@
         <div class="meta"><span>${tag("LY")}</span><span>${i + 1} / ${qs.length}</span></div>
         <div class="bar"><i style="width:${i / qs.length * 100}%"></i></div>
         <div class="ctx" style="font-size:24px">${esc(r.s)}</div>
-        <p style="color:var(--muted);margin:0">把空格的字寫在下面（多個空格用「／」分開）</p>
-        ${padHTML("pad", 150, 40)}
+        <p style="color:var(--muted);margin:0">把空格的字依序打出來（多個空格可用空白或「／」隔開）</p>
+        ${typeHTML("inp", 1, "打字…")}
         <div id="ans"></div>
         <div class="btns" id="act"><button class="btn" id="reveal">對答案</button></div></div>`;
-      const pad = makePad($("#pad"), { width: 4 });
-      wireTools(app, [pad], b => { const gh = $("#pad-ghost"); const on = !gh.textContent; gh.textContent = on ? r.a : ""; b.classList.toggle("on", on); });
-      $("#reveal").onclick = () => {
-        if (pad.empty()) { toast("先默寫看看 ✍️"); return; }
+      const inp = $("#inp");
+      const check = () => {
+        if (inp.readOnly || needInput(inp, "先默寫看看 ⌨️")) return;
+        lock(inp);
+        const d = diff(inp.value, r.a), ok = !d.errors;
+        if (ok) { score++; addStar(); cheer(); } else { qs.push(r); toast("等一下再默一次 📌"); }
         // 把答案依序填回句子
         const parts = r.a.split("／"); let n = 0;
         const full = r.s.replace(/＿+/g, () => parts[n++] || "");
-        $("#ans").innerHTML = `<div class="answer pop"><div class="a">${esc(r.a)}</div><div class="tip">完整句：${esc(full)}</div></div>`;
-        app.querySelector('[data-t="trace"]').hidden = false;
-        $("#act").innerHTML = `<button class="btn good" data-s="1">✅ 寫對了</button><button class="btn bad" data-s="0">❌ 寫錯了</button>`;
-        $("#act").querySelectorAll("[data-s]").forEach(b => b.onclick = () => {
-          if (+b.dataset.s) { score++; addStar(); cheer(); } else { qs.push(r); toast("等一下再默一次 📌"); }
-          i++; show();
-        });
+        $("#ans").innerHTML = `<div class="answer pop ${ok ? "" : "no"}">${mineHTML(d, ok)}<div class="a">${esc(r.a)}</div><div class="tip">完整句：${esc(full)}</div></div>`;
+        $("#act").innerHTML = `<button class="btn" id="nx">${i + 1 < qs.length ? "下一題" : "看結果"}</button>`;
+        const nx = $("#nx"); nx.onclick = () => { i++; show(); }; setTimeout(() => nx.focus(), 50);
       };
+      $("#reveal").onclick = check; onSubmit(inp, check);
     }
     show();
   };
@@ -489,8 +446,8 @@
     setTitle("五言絕句");
     app.innerHTML = `
       <div class="grid">
-        <button class="tile" data-go="poemw/exam"><span class="ic">✍️</span><b>整首默寫</b><small>範圍 5–8，四句全部手寫</small></button>
-        <button class="tile" data-go="poemline/exam"><span class="ic">🔗</span><b>接下句</b><small>看一句，寫出下一句或上一句</small></button>
+        <button class="tile" data-go="poemw/exam"><span class="ic">✍️</span><b>整首默寫</b><small>範圍 5–8，四句全部打出來</small></button>
+        <button class="tile" data-go="poemline/exam"><span class="ic">🔗</span><b>接下句</b><small>看一句，打出下一句或上一句</small></button>
         <button class="tile" data-go="quiz/SH"><span class="ic">📝</span><b>詩詞選擇題</b><small>作者、修辭、賞析</small></button>
         <button class="tile" data-go="cards/SH"><span class="ic">📚</span><b>詩人重點卡</b><small>詩仙、詩聖、詩佛…</small></button>
       </div>
@@ -517,7 +474,7 @@
     app.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
   }
 
-  // 整首默寫：四行橫線手寫板
+  // 整首默寫：四句打字，逐字比對
   routes.poemw = arg => {
     setTitle("整首默寫");
     const qs = shuffle(poemPool(arg));
@@ -530,44 +487,37 @@
         <div class="bar"><i style="width:${done / total * 100}%"></i></div>
         <div class="term" style="font-size:34px">${p.title}</div>
         <div class="term-sub">${p.author}　<button class="hint-btn" id="hint">提示每句第一個字</button></div>
-        <p style="color:var(--muted);margin:8px 0 0;text-align:center">一行寫一句，四句都要寫（標點可省略）</p>
-        <div class="pad-wrap"><canvas class="pad lines" id="pad" style="height:240px"></canvas>
-          <div class="ghost" id="pad-ghost" style="font-size:38px;line-height:57px;flex-direction:column;justify-content:flex-start;padding-top:6px;letter-spacing:10px"></div></div>
-        <div class="pad-tools">
-          <button class="tool on" data-t="pen">✏️ 筆</button><button class="tool" data-t="er">🧽 橡皮擦</button>
-          <button class="tool" data-t="undo">↶ 復原</button><button class="tool" data-t="clear">🗑️ 清除</button>
-          <span class="sp"></span><button class="tool" data-t="trace" hidden>👻 描寫答案</button>
-        </div>
+        <p style="color:var(--muted);margin:8px 0 0;text-align:center">一行打一句，四句都要打（標點可省略）</p>
+        <div id="hintbox"></div>
+        <textarea class="typein poem" id="inp" rows="4" placeholder="第一句&#10;第二句&#10;第三句&#10;第四句" autocomplete="off" spellcheck="false"></textarea>
         <div id="ans"></div>
-        <div class="btns" id="act"><button class="btn" id="reveal">寫好了，對答案</button></div></div>`;
-      const pad = makePad($("#pad"), { width: 3.6 });
-      const ghost = $("#pad-ghost");
-      const setGhost = full => { ghost.innerHTML = p.lines.map(l => `<div>${full ? l : l[0] + "　　　　"}</div>`).join(""); };
-      wireTools(app, [pad], b => { const on = !b.classList.contains("on"); on ? setGhost(true) : (ghost.innerHTML = ""); b.classList.toggle("on", on); });
-      $("#hint").onclick = () => { setGhost(false); missed.add(p.n); toast("提示用掉了，這首會算「差一點」喔"); };
-      $("#reveal").onclick = () => {
-        if (pad.empty()) { toast("先默寫看看 ✍️"); return; }
-        $("#ans").innerHTML = `<div class="answer pop">
-          <div class="a" style="font-size:26px;line-height:1.8">${p.lines.map((l, k) => l + (k % 2 ? "。" : "，")).join("<br>")}</div>
-          <div class="tip">逐字檢查：錯一個字也算錯喔！特別注意 ${hardChars(p)}</div></div>`;
-        app.querySelector('[data-t="trace"]').hidden = false;
-        $("#act").innerHTML = `<button class="btn good" data-s="2">✅ 全對</button><button class="btn warn" data-s="1">🟡 錯 1–2 字</button><button class="btn bad" data-s="0">❌ 不熟</button>`;
-        $("#act").querySelectorAll("[data-s]").forEach(b => b.onclick = () => {
-          const s = +b.dataset.s;
-          if (s === 2) {
-            if (!missed.has(p.n)) right++;
-            S.poem[p.n] = (S.poem[p.n] || 0) + 1; save();
-            qs.shift(); done++; addStar(2); cheer(); show();
-          } else {
-            missed.add(p.n);
-            qs.shift(); qs.splice(Math.min(qs.length, 1), 0, p);
-            pad.clear(); setGhost(true); app.querySelector('[data-t="trace"]').classList.add("on");
-            $("#ans").innerHTML = ""; toast("照著淡淡的字描一遍，等一下再默一次 📌");
-            $("#act").innerHTML = `<button class="btn" id="nx">描完了，繼續</button>`;
-            $("#nx").onclick = show;
-          }
-        });
+        <div class="btns" id="act"><button class="btn" id="reveal">打好了，對答案</button></div></div>`;
+      const inp = $("#inp");
+      $("#hint").onclick = () => {
+        $("#hintbox").innerHTML = `<div class="tip" style="text-align:center;font-family:var(--kai);font-size:20px">${p.lines.map(l => l[0] + "＿＿＿＿").join("　")}</div>`;
+        missed.add(p.n); toast("提示用掉了，這首會算「差一點」喔");
       };
+      const check = () => {
+        if (inp.readOnly || needInput(inp, "先默寫看看 ⌨️")) return;
+        lock(inp);
+        const d = diff(inp.value, p.lines.join("")), ok = !d.errors;
+        if (ok) {
+          if (!missed.has(p.n)) right++;
+          S.poem[p.n] = (S.poem[p.n] || 0) + 1; save();
+          qs.shift(); done++; addStar(2); cheer();
+        } else {
+          missed.add(p.n);
+          qs.shift(); qs.splice(Math.min(qs.length, 1), 0, p);
+          toast(d.errors <= 2 ? `差一點！錯 ${d.errors} 個字，等一下再默一次 💪` : "還不熟，看清楚答案，等一下再默一次 📌");
+        }
+        $("#ans").innerHTML = `<div class="answer pop ${ok ? "" : "no"}">
+          ${mineHTML(d, ok)}
+          <div class="a" style="font-size:26px;line-height:1.8">${p.lines.map((l, k) => l + (k % 2 ? "。" : "，")).join("<br>")}</div>
+          <div class="tip">${ok ? "全對！" : "紅色劃掉的是錯字，綠色是正確的字（虛線框＝漏掉的字）。"}特別注意 ${hardChars(p)}</div></div>`;
+        $("#act").innerHTML = `<button class="btn" id="nx">${qs.length ? "繼續" : "看結果"}</button>`;
+        const nx = $("#nx"); nx.onclick = show; setTimeout(() => nx.focus(), 50);
+      };
+      $("#reveal").onclick = check; onSubmit(inp, check);
     }
     show();
   };
@@ -590,23 +540,22 @@
       app.innerHTML = `<div class="card pop">
         <div class="meta"><span>${tag("SH")} 〈${p.title}〉${p.author}</span><span>${i + 1} / ${qs.length}</span></div>
         <div class="bar"><i style="width:${i / qs.length * 100}%"></i></div>
-        <p style="text-align:center;color:var(--muted);margin:0">寫出${askNext ? "下" : "上"}一句</p>
+        <p style="text-align:center;color:var(--muted);margin:0">打出${askNext ? "下" : "上"}一句</p>
         <div class="word-show" style="font-size:30px;letter-spacing:3px">${shown}</div>
-        ${padHTML("pad", 130, 44)}
+        <div class="type-center">${typeHTML("inp", 1, "打字…")}</div>
         <div id="ans"></div>
         <div class="btns" id="act"><button class="btn" id="reveal">對答案</button></div></div>`;
-      const pad = makePad($("#pad"), { width: 4 });
-      wireTools(app, [pad], b => { const gh = $("#pad-ghost"); const on = !gh.textContent; gh.textContent = on ? p.lines[target] : ""; b.classList.toggle("on", on); });
-      $("#reveal").onclick = () => {
-        if (pad.empty()) { toast("先寫寫看 ✍️"); return; }
-        $("#ans").innerHTML = `<div class="answer pop"><div class="a">${p.lines[target]}</div><div class="tip">全詩：${poemText(p)}</div></div>`;
-        app.querySelector('[data-t="trace"]').hidden = false;
-        $("#act").innerHTML = `<button class="btn good" data-s="1">✅ 寫對了</button><button class="btn bad" data-s="0">❌ 寫錯了</button>`;
-        $("#act").querySelectorAll("[data-s]").forEach(b => b.onclick = () => {
-          if (+b.dataset.s) { score++; addStar(); cheer(); } else { qs.push(qs[i]); toast("等一下再考一次 📌"); }
-          i++; show();
-        });
+      const inp = $("#inp");
+      const check = () => {
+        if (inp.readOnly || needInput(inp, "先打打看 ⌨️")) return;
+        lock(inp);
+        const d = diff(inp.value, p.lines[target]), ok = !d.errors;
+        if (ok) { score++; addStar(); cheer(); } else { qs.push(qs[i]); toast("等一下再考一次 📌"); }
+        $("#ans").innerHTML = `<div class="answer pop ${ok ? "" : "no"}">${mineHTML(d, ok)}<div class="a">${p.lines[target]}</div><div class="tip">全詩：${poemText(p)}</div></div>`;
+        $("#act").innerHTML = `<button class="btn" id="nx">${i + 1 < qs.length ? "下一題" : "看結果"}</button>`;
+        const nx = $("#nx"); nx.onclick = () => { i++; show(); }; setTimeout(() => nx.focus(), 50);
       };
+      $("#reveal").onclick = check; onSubmit(inp, check);
     }
     show();
   };

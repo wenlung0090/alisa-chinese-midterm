@@ -13,9 +13,6 @@
   --warn: #d98a1c;
   --warn-bg: #fff1dc;
   --pad: #fffdf8;
-  --pad-line: #e9dcc4;
-  --pad-tian: #f0b8b8;
-  --ink-pen: #1d2a5a;
   --shadow: 0 2px 10px rgba(60, 40, 10, .08);
   --kai: "BiauKai", "DFKai-SB", "標楷體", "Kaiti TC", "STKaiti", "KaiTi", serif;
 }
@@ -23,14 +20,14 @@
   :root:not([data-theme="light"]) {
     --bg: #1b1916; --card: #262320; --ink: #f1ebe1; --muted: #a99e8f; --line: #3a352f;
     --good-bg: #1f3a28; --bad-bg: #452424; --warn-bg: #45351c;
-    --pad: #2b2824; --pad-line: #4a4238; --pad-tian: #6b3a3a; --ink-pen: #e8eefc;
+    --pad: #2b2824;
     --shadow: 0 2px 10px rgba(0,0,0,.35);
   }
 }
 :root[data-theme="dark"] {
   --bg: #1b1916; --card: #262320; --ink: #f1ebe1; --muted: #a99e8f; --line: #3a352f;
   --good-bg: #1f3a28; --bad-bg: #452424; --warn-bg: #45351c;
-  --pad: #2b2824; --pad-line: #4a4238; --pad-tian: #6b3a3a; --ink-pen: #e8eefc;
+  --pad: #2b2824;
   --shadow: 0 2px 10px rgba(0,0,0,.35);
 }
 
@@ -103,36 +100,26 @@ main { max-width: 860px; margin: 0 auto; padding: 16px; }
 .ctx mark { background: #ffe58a; color: #2a2622; padding: 0 2px; border-radius: 3px; }
 .hint-btn { border: 1px dashed var(--line); background: transparent; border-radius: 8px; padding: 2px 10px; font-size: 14px; color: var(--muted); }
 
-/* 手寫板 */
-.pad-wrap { position: relative; margin-top: 10px; }
-.pad {
-  display: block; width: 100%; border-radius: 14px; border: 2px solid var(--line);
-  background-color: var(--pad); touch-action: none; cursor: crosshair;
+/* 打字作答 */
+.typein {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 10px; padding: 10px 14px;
+  border: 2px solid var(--line); border-radius: 14px; background: var(--pad); color: var(--ink);
+  font-family: var(--kai); font-size: 22px; line-height: 1.6; resize: vertical; outline: none;
 }
-.pad.lines {
-  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 55px, var(--pad-line) 55px, var(--pad-line) 57px);
-  background-position: 0 6px;
-}
-.pad-tools { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
-.tool { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 6px 12px; font-size: 15px; }
-.tool.on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
-.pad-tools .sp { flex: 1; }
-.ghost {
-  position: absolute; inset: 0; pointer-events: none; display: flex; align-items: center; justify-content: center;
-  font-family: var(--kai); color: var(--ink); opacity: .13; padding: 10px; text-align: center; line-height: 1.5;
-}
+.typein:focus { border-color: var(--accent); }
+.typein[readonly] { opacity: .75; }
+.typein.poem { font-size: 26px; letter-spacing: 4px; line-height: 1.8; }
+.type-center .typein { max-width: 360px; margin-left: auto; margin-right: auto; text-align: center; font-size: 28px; }
+.answer.no { background: var(--warn-bg); }
+.mine { font-family: var(--kai); font-size: 22px; line-height: 1.8; margin-bottom: 6px; word-break: break-all; }
+.mine .lbl { font-family: "PingFang TC", sans-serif; font-size: 13px; color: var(--muted); margin-right: 8px; }
+.mine.ok { color: var(--good); }
+.mine del { color: #d33; text-decoration: line-through 2px; }
+.mine ins { text-decoration: none; background: #c9f2d2; color: #14632f; border-radius: 4px; padding: 0 1px; }
+.mine ins.miss { background: none; color: #14632f; outline: 1.5px dashed #2a9a4f; outline-offset: -1px; }
+.answer .keys span.hit { background: #c9f2d2; color: #14632f; }
+b.hit { color: var(--good); } b.miss { color: #d33; text-decoration: underline; }
 
-.tian-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
-.tian-cell { position: relative; width: min(42vw, 220px); }
-.tian-cell canvas {
-  width: 100%; aspect-ratio: 1; border: 2px solid var(--pad-tian); border-radius: 6px;
-  background:
-    linear-gradient(var(--pad-tian), var(--pad-tian)) center / 100% 1px no-repeat,
-    linear-gradient(var(--pad-tian), var(--pad-tian)) center / 1px 100% no-repeat,
-    var(--pad);
-  background-blend-mode: normal;
-  touch-action: none;
-}
 .word-show { font-family: var(--kai); font-size: 38px; text-align: center; letter-spacing: 6px; margin: 6px 0 10px; }
 .blank { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; vertical-align: middle;
   width: 1.3em; height: 1.3em; border: 2px dashed var(--accent); border-radius: 8px; margin: 0 2px; font-family: inherit; }
